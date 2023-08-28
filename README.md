@@ -2,6 +2,7 @@
 A simple standalone board support package that allows the integration of the Orange Pi Lts 3 and the RFM98 LoRaWAN, allowing data transmission and reception.
 
 **Perform the following Steps before using the BSP**
+
 Install the spidev library using the following command in your terminal:
   "sudo pip3 install spidev"
   
