@@ -78,9 +78,13 @@ class RFM98:
         else:
             print("Invalid mode name: ", mode_name)
 
-    def init_fifo_addr_ptr(self):
+    def init_Tx_fifo_addr_ptr(self):
         fifo_tx_base_addr = self.read_register('FIFO_TX_BASE_ADDR')
         self.set_register('FIFO_ADDR_PTR', fifo_tx_base_addr)
+
+    def init_Rx_fifo_addr_ptr(self):
+        fifo_rx_base_addr = self.read_register('FIFO_RX_BASE_ADDR')
+        self.set_register('FIFO_ADDR_PTR', fifo_rx_base_addr)
 
     def write_to_fifo(self, data_list):
         self.set_register('FIFO', data_list)
@@ -96,7 +100,7 @@ class RFM98:
         payload_size = len(data_list)
         self.set_register('PAYLOAD_LENGTH', payload_size)
         
-        self.init_fifo_addr_ptr()
+        self.init_Tx_fifo_addr_ptr()
 
         self.set_mode('STDBY')  # Standby Mode
         register = self.lookup_register('FIFO')
@@ -130,7 +134,8 @@ class RFM98:
             modem_status = self.read_register('MODEM_STAT')  # Read the modem status
             #print("Modem Status:", modem_status)
             irq_flags = self.read_register('IRQ_FLAGS')  # Read the IRQ flags
-            #print("Irq Flags =", irq_flags)          
+            #print("Irq Flags =", irq_flags)
+            self.init_Rx_fifo_addr_ptr();          
             if irq_flags & 0x50:  # Check if valid_header or rx_done flags are set
                 valid_header = (irq_flags & 0x10) >> 4
                 rx_done = (irq_flags & 0x40) >> 6
