@@ -96,7 +96,8 @@ class RFM98:
             irq_flags = self.read_register('IRQ_FLAGS')
         return irq_flags
 
-    def transmit(self, data_list):
+    def transmit(self, data_pack):
+        data_list = list(data_pack)
         payload_size = len(data_list)
         self.set_register('PAYLOAD_LENGTH', payload_size)
         
@@ -256,7 +257,6 @@ rfm = RFM98()
 
 while True:
     data_pack = struct.pack("<fff", 22.25, 0.176, 56.8584)
-    data_list = list(data_pack)
-    rfm.transmit(data_list)
+    rfm.transmit(data_pack)
     #rfm.receive()
 
