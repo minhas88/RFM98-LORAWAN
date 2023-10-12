@@ -1,7 +1,7 @@
 import spidev
 import struct
 import OPi.GPIO as GPIO
-from time import sleep
+import time
 
 class RFM98:
     def __init__(self, bus=1, device=0):
@@ -78,17 +78,19 @@ class RFM98:
         else:
             print("Invalid mode name: ", mode_name)
 
-    def init_Tx_fifo_addr_ptr(self):
+    def init_fifo_tx_addr_ptr(self):
         fifo_tx_base_addr = self.read_register('FIFO_TX_BASE_ADDR')
         self.set_register('FIFO_ADDR_PTR', fifo_tx_base_addr)
-
-    def init_Rx_fifo_addr_ptr(self):
+        
+    def init_fifo_rx_addr_ptr(self):
         fifo_rx_base_addr = self.read_register('FIFO_RX_BASE_ADDR')
         self.set_register('FIFO_ADDR_PTR', fifo_rx_base_addr)
-
-    def write_to_fifo(self, data_list):
-        self.set_register('FIFO', data_list)
-
+        
+    def is_rx_good(self):
+        irq_flags = self.get_irq_flaq()  # Read the IRQ flags
+        #print("Irq Flags =", irq_flags)
+        return any([irq_flags[s] for s in ['ValidHeader', 'PayloadCrcError', 'RxDone']])
+        
     def read_and_clear_irq_flags(self):
         irq_flags = self.read_register('IRQ_FLAGS')
         while irq_flags & 0x08:
@@ -97,71 +99,98 @@ class RFM98:
         return irq_flags
 
     def transmit(self, data_pack):
+        #self.set_mode('SLEEP')
+        
         data_list = list(data_pack)
         payload_size = len(data_list)
         self.set_register('PAYLOAD_LENGTH', payload_size)
-        
-        self.init_Tx_fifo_addr_ptr()
 
         self.set_mode('STDBY')  # Standby Mode
+        
+        self.init_fifo_tx_addr_ptr()
+        
         register = self.lookup_register('FIFO')
-
         self.set_NSS_pin()
         data = self.spi.xfer([register | 0x80] + data_list)[1:]
         self.unset_NSS_pin()
-        print("Data being sent:", data)
+        #print("Data being sent:", data)
         
         self.set_mode('TX')  # Transmit Mode
         mode = self.get_mode()
         print("MODE =", mode)
-        sleep(0.2)
+         
+        irq_flags = self.read_register('IRQ_FLAGS') 
+        tx_done_flag = (irq_flags >> 3) & 0x01
+        while tx_done_flag != 1:
+             irq_flags = self.read_register('IRQ_FLAGS')
+             tx_done_flag = (irq_flags >> 3) & 0x01
+             #print("TX Done Flag: ", tx_done_flag)
+                 
+        if tx_done_flag == 1:      
+            irq_flags = self.read_and_clear_irq_flags()
+            #print("IrqFlags =", irq_flags)
 
-        irq_flags = self.read_and_clear_irq_flags()
-        #print("IrqFlags =", irq_flags)
-
-        self.set_mode('STDBY')  # Standby Mode
-
-        self.set_register('IRQ_FLAGS', 0xFF)  # Clear All IrqFlags
         print('      ')
 
-    def receive(self): 
-        self.set_mode('RXCONT')  # Set the module to receive mode
-
-        mode = self.get_mode()
-        print("MODE =", mode)
+    def receive(self):
+        self.init_fifo_rx_addr_ptr()
         
+        self.set_mode('SLEEP')
 
+        self.set_mode('RXCONT')  # Set the module to receive mode
+        start_time = time.time()
+        
         while True:
+            mode = self.get_mode()
+            print("MODE =", mode)
             modem_status = self.read_register('MODEM_STAT')  # Read the modem status
             #print("Modem Status:", modem_status)
-            irq_flags = self.read_register('IRQ_FLAGS')  # Read the IRQ flags
-            #print("Irq Flags =", irq_flags)
-            self.init_Rx_fifo_addr_ptr();          
-            if irq_flags & 0x50:  # Check if valid_header or rx_done flags are set
-                valid_header = (irq_flags & 0x10) >> 4
-                rx_done = (irq_flags & 0x40) >> 6
                 
-                #if valid_header or rx_done:
-                    #print("Packet")            
+            while True:
+                irq_flags = self.read_register('IRQ_FLAGS')
+                rx_done_flag = (irq_flags >> 6) & 0x01
+                vld_hdr_flag = (irq_flags >> 4) & 0x01
+                #print("RX Done Flag:", rx_done_flag)
+                #print("Valid Header Flag:", vld_hdr_flag)
+                if rx_done_flag == 1 and vld_hdr_flag == 1:
+                    break
+                if (time.time() - start_time > 0.5):
+                    print("Timeout occurred, acknowledgement not received.")
+                    return 0            
+                    break
+               
+            if self.is_rx_good():  # Check if flags are set or not    
                 packet_length = self.read_register('RX_NB_BYTES')  # Read the packet length
                 print("Num of Bytes:", packet_length)
-                #recv_data = self.read_register('FIFO')
+
                 register = self.lookup_register('FIFO')
                 self.set_NSS_pin()
                 recv_data = self.spi.xfer([register, 0x00] + [0]*(packet_length-1))[1:]
                 self.unset_NSS_pin()
-                value = struct.unpack("<fff", bytes(recv_data))
-                print("Received Packet = ", value)
+                
+                if (packet_length == 12):
+                    value = struct.unpack("<fff", bytes(recv_data))
+                    #print("Received Packet = ", value)
+                    rx_current_addr = self.read_register('FIFO_RX_CURR_ADDR')  # Read the current address in FIFO
+                    self.set_register('FIFO_ADDR_PTR', rx_current_addr) # Initialize FifoAddrPtr to RxCurrentAddr
+                    #print(value)
+                    return value
 
-                self.set_register('IRQ_FLAGS', 0xFF)  # Clear the IRQ flags
-                self.set_mode('STDBY')  # Set the module to standby mode
-
-                rx_current_addr = self.read_register('FIFO_RX_CURR_ADDR')  # Read the current address in FIFO
-                self.set_register('FIFO_ADDR_PTR', rx_current_addr) # Initialize FifoAddrPtr to RxCurrentAddr
-                break  # Exit the loop and complete the cycle
-
-            sleep(0.2)  # Wait for a short duration before checking for received data
+            #time.sleep(0.1)  # Wait for a short duration before checking for received data
             print('      ')
+            
+    def get_irq_flaq(self):
+        flag = self.read_register('IRQ_FLAGS')
+        return {
+            'RxTimeout':         (flag >> 7) & 0x01,
+            'RxDone':            (flag >> 6) & 0x01,
+            'PayloadCrcError':   (flag >> 5) & 0x01,
+            'ValidHeader':       (flag >> 4) & 0x01,
+            'TxDone':            (flag >> 3) & 0x01,
+            'CadDone':           (flag >> 2) & 0x01,
+            'FhssChangeChannel': (flag >> 1) & 0x01,
+            'CadDetected':       (flag & 0x01)
+            }
         
         
 class MODES:
@@ -179,22 +208,7 @@ class MODES:
     @staticmethod
     def get_mode(mode_name):
         return MODES.Modes.get(mode_name)
-        
-class MASK:
-    IRQ_FLAGS = {
-        'RxTimeout'           : 7,
-        'RxDone'              : 6,
-        'PayloadCrcError'     : 5,
-        'ValidHeader'         : 4,
-        'TxDone'              : 3,
-        'CadDone'             : 2,
-        'FhssChangeChannel'   : 1,
-        'CadDetected'         : 0
-    }
 
-    @staticmethod
-    def get_flag(IqrFlag):
-        return MASK.IRQ_FLAGS.get(IqrFlag)
         
 class RegMap:
     registers = {
@@ -251,7 +265,7 @@ class RegMap:
     @staticmethod
     def get_register(register_name):
         return RegMap.registers.get(register_name)
-
+    
 
 rfm = RFM98()
 
